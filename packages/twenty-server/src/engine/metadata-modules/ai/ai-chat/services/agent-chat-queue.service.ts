@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import { FileFolder } from 'twenty-shared/types';
 import { isNonEmptyArray } from 'twenty-shared/utils';
@@ -11,29 +11,32 @@ import { resolveMessageSenderApplicationId } from 'src/engine/metadata-modules/a
 import { AgentMessageRole } from 'src/engine/metadata-modules/ai/ai-history/enums/agent-message-role.enum';
 import { AgentMessageStatus } from 'src/engine/metadata-modules/ai/ai-history/enums/agent-message-status.enum';
 import { AgentTurnStatus } from 'src/engine/metadata-modules/ai/ai-history/enums/agent-turn-status.enum';
-import { AgentHistoryRepository } from 'src/engine/metadata-modules/ai/ai-history/repositories/agent-history-repository';
-import { InjectAgentHistoryRepository } from 'src/engine/metadata-modules/ai/ai-history/repositories/inject-agent-history-repository.decorator';
+import { type AgentHistoryRepository } from 'src/engine/metadata-modules/ai/ai-history/repositories/agent-history-repository';
+import { getAgentHistoryRepositoryToken } from 'src/engine/metadata-modules/ai/ai-history/repositories/inject-agent-history-repository.decorator';
 import { AgentConversationWriterService } from 'src/engine/metadata-modules/ai/ai-history/services/agent-conversation-writer.service';
-import { AgentMessagePartWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-message-part.workspace-entity';
-import { AgentMessageWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-message.workspace-entity';
-import { AgentTurnWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-turn.workspace-entity';
-import { InjectWorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/inject-workspace-scoped-repository.decorator';
-import { WorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository';
+import { type AgentMessageWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-message.workspace-entity';
+import { type AgentTurnWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-turn.workspace-entity';
+import { getWorkspaceScopedRepositoryToken } from 'src/engine/twenty-orm/workspace-scoped-repository/get-workspace-scoped-repository-token.util';
+import { type WorkspaceScopedRepository } from 'src/engine/twenty-orm/workspace-scoped-repository/workspace-scoped-repository';
+import { type AgentChatAssistantReplyContext } from 'src/engine/metadata-modules/ai/ai-chat/types/agent-chat-assistant-reply-context.type';
+import { buildAgentChatAssistantReplyProviderMetadata } from 'src/engine/metadata-modules/ai/ai-chat/utils/build-agent-chat-assistant-reply-provider-metadata.util';
 
 @Injectable()
 export class AgentChatQueueService {
-  constructor(
-    @InjectAgentHistoryRepository('agentTurn')
-    private readonly turnRepository: AgentHistoryRepository<AgentTurnWorkspaceEntity>,
-    @InjectAgentHistoryRepository('agentMessage')
-    private readonly messageRepository: AgentHistoryRepository<AgentMessageWorkspaceEntity>,
-    @InjectAgentHistoryRepository('agentMessagePart')
-    private readonly messagePartRepository: AgentHistoryRepository<AgentMessagePartWorkspaceEntity>,
-    @InjectWorkspaceScopedRepository(FileEntity)
-    private readonly fileRepository: WorkspaceScopedRepository<FileEntity>,
-    private readonly conversationWriterService: AgentConversationWriterService,
-    private readonly threadService: AgentChatThreadService,
-  ) {}
+  @Inject(getAgentHistoryRepositoryToken('agentTurn'))
+  private readonly turnRepository: AgentHistoryRepository<AgentTurnWorkspaceEntity>;
+
+  @Inject(getAgentHistoryRepositoryToken('agentMessage'))
+  private readonly messageRepository: AgentHistoryRepository<AgentMessageWorkspaceEntity>;
+
+  @Inject(getWorkspaceScopedRepositoryToken(FileEntity))
+  private readonly fileRepository: WorkspaceScopedRepository<FileEntity>;
+
+  @Inject(AgentConversationWriterService)
+  private readonly conversationWriterService: AgentConversationWriterService;
+
+  @Inject(AgentChatThreadService)
+  private readonly threadService: AgentChatThreadService;
 
   async queueMessage({
     threadId,
@@ -43,6 +46,7 @@ export class AgentChatQueueService {
     workspaceId,
     userWorkspaceId,
     workspaceMemberId,
+    assistantReplyContext,
   }: {
     threadId: string;
     text: string;
@@ -51,6 +55,7 @@ export class AgentChatQueueService {
     workspaceId: string;
     userWorkspaceId: string;
     workspaceMemberId: string;
+    assistantReplyContext?: AgentChatAssistantReplyContext;
   }) {
     const messageValues = {
       ...(id ? { id } : {}),
@@ -91,6 +96,9 @@ export class AgentChatQueueService {
         orderIndex: 0,
         type: 'text',
         textContent: text,
+        providerMetadata: buildAgentChatAssistantReplyProviderMetadata(
+          assistantReplyContext,
+        ),
       },
       ...(fileAttachments ?? [])
         .filter((attachment) => validFileIds.has(attachment.id))
@@ -103,7 +111,10 @@ export class AgentChatQueueService {
         })),
     ];
 
-    await this.messagePartRepository.insert(workspaceId, parts);
+    await this.conversationWriterService.runInTransaction(
+      workspaceId,
+      (scope) => scope.insert('agentMessagePart', parts),
+    );
 
     await this.threadService.notifyThreadActivityUpdated({
       threadId,

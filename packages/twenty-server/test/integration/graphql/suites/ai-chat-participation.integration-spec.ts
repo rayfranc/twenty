@@ -6,6 +6,7 @@ import { sendChatParticipationMessage } from 'test/integration/graphql/utils/sen
 import { waitForAllJobsToFinish } from 'test/integration/utils/wait-for-all-jobs-to-finish.util';
 import { FeatureFlagKey, RecordShareAccessLevel } from 'twenty-shared/types';
 
+import { AiChatAssistantMode } from 'src/engine/core-modules/workspace/enums/ai-chat-assistant-mode.enum';
 import { WORKSPACE_MEMBER_DATA_SEED_IDS } from 'src/engine/workspace-manager/dev-seeder/data/constants/workspace-member-data-seeds.constant';
 
 describe('Chat participation through the authenticated API', () => {
@@ -36,11 +37,32 @@ describe('Chat participation through the authenticated API', () => {
     });
   });
 
-  it('keeps Ada excluded until tagged, then answers subsequent direct messages', async () => {
-    const threadId = context.registerThread();
+  const addJonyAsParticipant = (threadId: string) =>
+    context.threadService.addParticipants({
+      workspaceId: context.workspaceId,
+      workspaceMemberId: context.workspaceMemberId,
+      threadId,
+      participantWorkspaceMemberIds: [WORKSPACE_MEMBER_DATA_SEED_IDS.JONY],
+      isMention: false,
+    });
+  const createDirectMessage = async () => {
+    const threadId = await context.createThread();
+
+    await context.setConversationType({
+      threadId,
+      conversationType: 'DIRECT_MESSAGE',
+    });
+    await addJonyAsParticipant(threadId);
+
+    return threadId;
+  };
+
+  it('keeps a canonical DM mention-only after Ada first joins', async () => {
+    models.enableEvaluation();
+    const threadId = await createDirectMessage();
     const excluded = await sendChatParticipationMessage({
       threadId,
-      isAssistantParticipant: false,
+      isAssistantParticipant: true,
     });
 
     expect(excluded.body.errors).toBeUndefined();
@@ -67,9 +89,106 @@ describe('Chat participation through the authenticated API', () => {
     const following = await sendChatParticipationMessage({ threadId });
 
     expect(following.body.errors).toBeUndefined();
-    expect(following.body.data.sendChatMessage.streamId).toEqual(
+    expect(following.body.data.sendChatMessage.streamId).toBeNull();
+    expect((await context.readThread(threadId)).isAssistantParticipant).toBe(
+      true,
+    );
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('blocks initial Ada additions and mentions in a canonical DM under Never', async () => {
+    models.enableEvaluation();
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+    });
+    const threadId = await createDirectMessage();
+    const response = await sendChatParticipationMessage({
+      threadId,
+      isAssistantParticipant: true,
+      isAssistantMentioned: true,
+    });
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.sendChatMessage.streamId).toBeNull();
+    expect((await context.readThread(threadId)).isAssistantParticipant).toBe(
+      false,
+    );
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('includes Ada on the first proactive DM message despite client opt-outs', async () => {
+    models.enableEvaluation();
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.PROACTIVE,
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+    const threadId = await createDirectMessage();
+    const response = await sendChatParticipationMessage({
+      threadId,
+      isAssistantParticipant: false,
+      shouldAssistantReply: false,
+    });
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.sendChatMessage.streamId).toEqual(
       expect.any(String),
     );
+    expect((await context.readThread(threadId)).isAssistantParticipant).toBe(
+      true,
+    );
+    expect(models.evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops replies in an existing DM after the workspace changes to Never', async () => {
+    models.enableEvaluation();
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.PROACTIVE,
+    });
+    const threadId = await createDirectMessage();
+    const first = await sendChatParticipationMessage({ threadId });
+
+    expect(first.body.errors).toBeUndefined();
+    expect(first.body.data.sendChatMessage.streamId).toEqual(
+      expect.any(String),
+    );
+    await waitForAllJobsToFinish();
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+    });
+    models.evaluate.mockClear();
+    const following = await sendChatParticipationMessage({
+      threadId,
+      isAssistantMentioned: true,
+    });
+
+    expect(following.body.errors).toBeUndefined();
+    expect(following.body.data.sendChatMessage.streamId).toBeNull();
+    expect((await context.readThread(threadId)).isAssistantParticipant).toBe(
+      false,
+    );
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('answers an Ada-only chat despite both Never settings and client opt-outs', async () => {
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+    const threadId = context.registerThread();
+    const response = await sendChatParticipationMessage({
+      threadId,
+      isAssistantParticipant: false,
+      shouldAssistantReply: false,
+    });
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.sendChatMessage.streamId).toEqual(
+      expect.any(String),
+    );
+    expect((await context.readThread(threadId)).isAssistantParticipant).toBe(
+      true,
+    );
+    expect(models.evaluate).not.toHaveBeenCalled();
   });
 
   it('delivers valid initial recipients unread without marking them mentioned', async () => {
@@ -215,6 +334,7 @@ describe('Chat participation through the authenticated API', () => {
     const retried = await sendChatParticipationMessage({
       threadId,
       isAssistantParticipant: false,
+      recipientWorkspaceMemberIds: [WORKSPACE_MEMBER_DATA_SEED_IDS.JONY],
     });
 
     expect(retried.body.errors).toBeUndefined();
@@ -227,6 +347,7 @@ describe('Chat participation through the authenticated API', () => {
   it('keeps Ada excluded for a cached client that omits the mention signal', async () => {
     const threadId = await context.createThread(false);
 
+    await addJonyAsParticipant(threadId);
     await context.saveMessage({ threadId });
     const response = await sendChatParticipationMessage({
       threadId,
@@ -240,17 +361,22 @@ describe('Chat participation through the authenticated API', () => {
     );
   });
 
-  it('preserves cached-client dispatch for a chat that already includes Ada', async () => {
+  it('does not bypass mention-only mode when a cached client omits the mention signal', async () => {
+    models.enableEvaluation();
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.MENTION_ONLY,
+    });
     const threadId = await context.createThread();
+
+    await addJonyAsParticipant(threadId);
     const response = await sendChatParticipationMessage({
       threadId,
       isAssistantMentioned: null,
     });
 
     expect(response.body.errors).toBeUndefined();
-    expect(response.body.data.sendChatMessage.streamId).toEqual(
-      expect.any(String),
-    );
+    expect(response.body.data.sendChatMessage.streamId).toBeNull();
+    expect(models.evaluate).not.toHaveBeenCalled();
   });
 
   it('preserves assistant execution outside the inbox when the client disables replies', async () => {

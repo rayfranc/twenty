@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createChatParticipationTestContext } from 'test/integration/ai/utils/create-chat-participation-test-context.util';
 import { RecordShareAccessLevel } from 'twenty-shared/types';
 
+import { AiChatAssistantMode } from 'src/engine/core-modules/workspace/enums/ai-chat-assistant-mode.enum';
 import { WORKSPACE_MEMBER_DATA_SEED_IDS } from 'src/engine/workspace-manager/dev-seeder/data/constants/workspace-member-data-seeds.constant';
 
 const MESSAGE_LOCK_CONTENTION_HOLD_MS = 6_000;
@@ -125,8 +126,53 @@ describe('Chat participation acceptance and recovery with real storage', () => {
     );
   });
 
+  it('rechecks Never during participation recovery without removing the accepted message', async () => {
+    const threadId = await context.createThread(false);
+
+    await context.setConversationType({
+      threadId,
+      conversationType: 'DIRECT_MESSAGE',
+    });
+    const message = await context.saveMessage({ threadId });
+    const messageArguments = {
+      ...participationArguments(threadId),
+      messageId: message.id,
+      isAssistantMentioned: true,
+      recipientWorkspaceMemberIds: [],
+    };
+
+    await context.participationService.completeMessage(messageArguments);
+    expect((await context.readThread(threadId)).isAssistantParticipant).toBe(
+      true,
+    );
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+    });
+    await context.participationService.completeMessage(messageArguments);
+
+    expect((await context.readThread(threadId)).isAssistantParticipant).toBe(
+      false,
+    );
+    expect(
+      await context.chatService.hasMessage({
+        workspaceId: context.workspaceId,
+        workspaceMemberId: context.workspaceMemberId,
+        threadId,
+        messageId: message.id,
+      }),
+    ).toBe(true);
+  });
+
   it('holds another send until the first Ada selection and message are stored', async () => {
     const threadId = await context.createThread();
+
+    await context.threadService.addParticipants({
+      workspaceId: context.workspaceId,
+      workspaceMemberId: context.workspaceMemberId,
+      threadId,
+      participantWorkspaceMemberIds: [WORKSPACE_MEMBER_DATA_SEED_IDS.JONY],
+      isMention: false,
+    });
     const controls: {
       release: () => void;
       markEntered: () => void;
@@ -148,10 +194,10 @@ describe('Chat participation acceptance and recovery with real storage', () => {
       work: async () => {
         controls.markEntered();
         await released;
-        await context.threadService.setInitialAssistantParticipation({
+        await context.threadService.applyAssistantParticipation({
           ...lockArguments,
           workspaceMemberId: context.workspaceMemberId,
-          isAssistantParticipant: false,
+          initialIsAssistantParticipant: false,
         });
         await context.saveMessage({ threadId });
       },

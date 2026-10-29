@@ -1,6 +1,8 @@
 import { configureChatParticipationModels } from 'test/integration/ai/utils/configure-chat-participation-models.util';
 import { createChatParticipationTestContext } from 'test/integration/ai/utils/create-chat-participation-test-context.util';
 
+import { AiChatAssistantMode } from 'src/engine/core-modules/workspace/enums/ai-chat-assistant-mode.enum';
+import { type AgentChatAssistantReplyContext } from 'src/engine/metadata-modules/ai/ai-chat/types/agent-chat-assistant-reply-context.type';
 import { AgentMessageRole } from 'src/engine/metadata-modules/ai/ai-history/enums/agent-message-role.enum';
 import { AgentMessageStatus } from 'src/engine/metadata-modules/ai/ai-history/enums/agent-message-status.enum';
 import { AgentTurnStatus } from 'src/engine/metadata-modules/ai/ai-history/enums/agent-turn-status.enum';
@@ -23,13 +25,15 @@ describe('Assistant reply selection with stored conversation participants', () =
   const shouldReply = async ({
     threadId,
     isAssistantMentioned = false,
+    shouldAssistantReply = true,
   }: {
     threadId: string;
-    isAssistantMentioned?: boolean;
+    isAssistantMentioned?: boolean | null;
+    shouldAssistantReply?: boolean;
   }) =>
     context.replyPolicyService.shouldReply({
       isAiChatInboxEnabled: true,
-      shouldAssistantReply: true,
+      shouldAssistantReply,
       thread: await context.threadService.getWritableThread({
         threadId,
         workspaceId: context.workspaceId,
@@ -57,6 +61,39 @@ describe('Assistant reply selection with stored conversation participants', () =
 
     return threadId;
   };
+  const saveMessageWithReplyContext = async ({
+    threadId,
+    assistantReplyContext,
+  }: {
+    threadId: string;
+    assistantReplyContext: AgentChatAssistantReplyContext;
+  }) =>
+    context.streamingService.saveMessageWithoutReply({
+      thread: await context.threadService.getWritableThread({
+        threadId,
+        workspaceId: context.workspaceId,
+        workspaceMemberId: context.workspaceMemberId,
+      }),
+      workspace: await context.getWorkspace(),
+      workspaceMemberId: context.workspaceMemberId,
+      userWorkspaceId: context.userWorkspaceId,
+      text: 'Continue the task with this answer.',
+      assistantReplyContext,
+    });
+  const shouldExecute = async ({
+    threadId,
+    messageId,
+  }: {
+    threadId: string;
+    messageId: string;
+  }) =>
+    context.replyExecutionPolicyService.shouldExecute({
+      threadId,
+      messageId,
+      workspace: await context.getWorkspace(),
+      workspaceMemberId: context.workspaceMemberId,
+      userWorkspaceId: context.userWorkspaceId,
+    });
 
   it('does not invoke the evaluator while Ada is absent', async () => {
     models.enableEvaluation();
@@ -66,11 +103,85 @@ describe('Assistant reply selection with stored conversation participants', () =
     expect(models.evaluate).not.toHaveBeenCalled();
   });
 
-  it('always answers a direct chat without evaluating it', async () => {
+  it('answers an Ada-only chat despite workspace Never modes and client opt-outs', async () => {
+    models.enableEvaluation();
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+    const threadId = await context.createThread(false);
+
+    await expect(
+      shouldReply({ threadId, shouldAssistantReply: false }),
+    ).resolves.toBe(true);
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('blocks an explicit mention in a shared chat when the inbox mode is Never', async () => {
+    models.enableEvaluation();
+    const threadId = await createGroup();
+
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    await expect(
+      shouldReply({ threadId, isAssistantMentioned: true }),
+    ).resolves.toBe(false);
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it.each([false, null])(
+    'keeps a shared chat mention-only with available JEV and mention signal %s',
+    async (isAssistantMentioned) => {
+      models.enableEvaluation();
+      const threadId = await createGroup();
+
+      await context.setAssistantModes({
+        aiChatInboxAssistantMode: AiChatAssistantMode.MENTION_ONLY,
+      });
+
+      await expect(
+        shouldReply({ threadId, isAssistantMentioned }),
+      ).resolves.toBe(false);
+      await expect(
+        shouldReply({ threadId, isAssistantMentioned: true }),
+      ).resolves.toBe(true);
+      expect(models.evaluate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a canonical DM mention-only when only one human participant remains', async () => {
     models.enableEvaluation();
     const threadId = await context.createThread();
 
-    await expect(shouldReply({ threadId })).resolves.toBe(true);
+    await context.setConversationType({
+      threadId,
+      conversationType: 'DIRECT_MESSAGE',
+    });
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    expect(await context.readParticipants(threadId)).toHaveLength(1);
+    await expect(shouldReply({ threadId })).resolves.toBe(false);
+    await expect(
+      shouldReply({ threadId, isAssistantMentioned: true }),
+    ).resolves.toBe(true);
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('applies the inbox mode to a channel with only one participant', async () => {
+    const threadId = await context.createChannelThread();
+
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    expect(await context.readParticipants(threadId)).toHaveLength(1);
+    await expect(
+      shouldReply({ threadId, isAssistantMentioned: true }),
+    ).resolves.toBe(false);
     expect(models.evaluate).not.toHaveBeenCalled();
   });
 
@@ -128,6 +239,167 @@ describe('Assistant reply selection with stored conversation participants', () =
     await expect(shouldReply({ threadId })).resolves.toBe(true);
     await addJonyAsParticipant(threadId);
     await expect(shouldReply({ threadId })).resolves.toBe(false);
+  });
+
+  it('blocks queued execution after Never is enabled and retains the accepted message', async () => {
+    const threadId = await createGroup();
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: true,
+        isDirectAssistantChat: false,
+      },
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(true);
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(false);
+    expect(
+      await context.chatService.hasMessage({
+        workspaceId: context.workspaceId,
+        workspaceMemberId: context.workspaceMemberId,
+        threadId,
+        messageId,
+      }),
+    ).toBe(true);
+  });
+
+  it('blocks a previously proactive unmentioned message after switching to mention-only', async () => {
+    const threadId = await createGroup();
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: false,
+        isDirectAssistantChat: false,
+      },
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(true);
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.MENTION_ONLY,
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(false);
+  });
+
+  it('executes a persisted explicit mention under mention-only mode', async () => {
+    const threadId = await createGroup();
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: true,
+        isDirectAssistantChat: false,
+      },
+    });
+
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.MENTION_ONLY,
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(true);
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('executes a persisted structured answer under mention-only mode', async () => {
+    const threadId = await createGroup();
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: false,
+        isDirectAssistantChat: false,
+        isStructuredRequestContinuation: true,
+      },
+    });
+
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.MENTION_ONLY,
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(true);
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('does not exempt a canonical DM with one remaining human at execution time', async () => {
+    const threadId = await context.createThread();
+
+    await context.setConversationType({
+      threadId,
+      conversationType: 'DIRECT_MESSAGE',
+    });
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: true,
+        isDirectAssistantChat: false,
+      },
+    });
+
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    expect(await context.readParticipants(threadId)).toHaveLength(1);
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(false);
+  });
+
+  it('executes an Ada-only message under both Never settings', async () => {
+    const threadId = await context.createThread(false);
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: false,
+        isDirectAssistantChat: true,
+      },
+    });
+
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(true);
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('executes a structured answer in an Ada-only chat under both Never settings', async () => {
+    const threadId = await context.createThread();
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: false,
+        isDirectAssistantChat: false,
+        isStructuredRequestContinuation: true,
+      },
+    });
+
+    await context.setAssistantModes({
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.NEVER,
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(true);
+    expect(models.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('preserves the shared audience of a first send before recipient delivery completes', async () => {
+    const threadId = await context.createThread();
+    const { messageId } = await saveMessageWithReplyContext({
+      threadId,
+      assistantReplyContext: {
+        isAssistantMentioned: true,
+        isDirectAssistantChat: false,
+      },
+    });
+
+    await context.setAssistantModes({
+      aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
+    });
+
+    expect(await context.readParticipants(threadId)).toHaveLength(1);
+    await expect(shouldExecute({ threadId, messageId })).resolves.toBe(false);
   });
 
   it('passes only the recent sent conversation texts to the external evaluator', async () => {

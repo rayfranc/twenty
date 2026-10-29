@@ -1,15 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { isDefined } from 'twenty-shared/utils';
 import { doNotTranslate } from 'twenty-shared/i18n';
 
 import { UsageOperationType } from 'src/engine/core-modules/usage/enums/usage-operation-type.enum';
-import { AgentChatThreadParticipantService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-thread-participant.service';
 import { AgentChatSharingService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-sharing.service';
 import { formatErrorWithCause } from 'src/engine/metadata-modules/ai/ai-chat/utils/format-error-with-cause.util';
 import { AiEvaluationService } from 'src/engine/metadata-modules/ai/ai-evaluation/services/ai-evaluation.service';
 import { AgentConversationReaderService } from 'src/engine/metadata-modules/ai/ai-history/services/agent-conversation-reader.service';
 import { type AgentChatThreadWorkspaceEntity } from 'src/engine/metadata-modules/ai/ai-history/standard-objects/agent-chat-thread.workspace-entity';
+
+import { AiChatAssistantMode } from 'src/engine/core-modules/workspace/enums/ai-chat-assistant-mode.enum';
+import { type WorkspaceEntity } from 'src/engine/core-modules/workspace/workspace.entity';
+import { AgentChatAssistantPolicyService } from 'src/engine/metadata-modules/ai/ai-chat/services/agent-chat-assistant-policy.service';
+import { resolveAgentChatAssistantParticipation } from 'src/engine/metadata-modules/ai/ai-chat/utils/resolve-agent-chat-assistant-participation.util';
 
 const ASSISTANT_REPLY_PROBABILITY_THRESHOLD = 0.5;
 const ASSISTANT_REPLY_HISTORY_MESSAGE_LIMIT = 20;
@@ -19,15 +23,19 @@ const ASSISTANT_REPLY_EVALUATION_TIMEOUT_MS = 5_000;
 export class AgentChatReplyPolicyService {
   private readonly logger = new Logger(AgentChatReplyPolicyService.name);
 
-  constructor(
-    private readonly participantService: AgentChatThreadParticipantService,
-    private readonly sharingService: AgentChatSharingService,
-    private readonly aiEvaluationService: AiEvaluationService,
-    private readonly conversationReaderService: AgentConversationReaderService,
-  ) {}
+  @Inject(AgentChatSharingService)
+  private readonly sharingService: AgentChatSharingService;
+
+  @Inject(AgentChatAssistantPolicyService)
+  private readonly assistantPolicyService: AgentChatAssistantPolicyService;
+
+  @Inject(AiEvaluationService)
+  private readonly aiEvaluationService: AiEvaluationService;
+
+  @Inject(AgentConversationReaderService)
+  private readonly conversationReaderService: AgentConversationReaderService;
 
   async shouldReply({
-    isAiChatInboxEnabled,
     shouldAssistantReply,
     thread,
     workspaceId,
@@ -36,40 +44,19 @@ export class AgentChatReplyPolicyService {
     candidateWorkspaceMemberIds,
     isAssistantMentioned,
     text,
+    workspace,
   }: {
     isAiChatInboxEnabled: boolean;
     shouldAssistantReply: boolean;
-    thread: Pick<
-      AgentChatThreadWorkspaceEntity,
-      'id' | 'isAssistantParticipant'
-    >;
+    thread: AgentChatThreadWorkspaceEntity;
     workspaceId: string;
     workspaceMemberId: string;
     userWorkspaceId: string;
     candidateWorkspaceMemberIds: string[];
     isAssistantMentioned?: boolean | null;
     text: string;
+    workspace?: WorkspaceEntity;
   }): Promise<boolean> {
-    if (!isAiChatInboxEnabled) {
-      return true;
-    }
-
-    if (!shouldAssistantReply) {
-      return false;
-    }
-
-    if (!isDefined(isAssistantMentioned)) {
-      return thread.isAssistantParticipant;
-    }
-
-    if (isAssistantMentioned) {
-      return true;
-    }
-
-    if (!thread.isAssistantParticipant) {
-      return false;
-    }
-
     const eligibleWorkspaceMemberIds =
       await this.sharingService.findEligibleParticipantWorkspaceMemberIds({
         workspaceId,
@@ -77,17 +64,43 @@ export class AgentChatReplyPolicyService {
         threadId: thread.id,
         memberIds: candidateWorkspaceMemberIds,
       });
-    const memberCount = await this.participantService.countMembers({
+    const assistantPolicy = await this.assistantPolicyService.resolve({
       workspaceId,
-      threadId: thread.id,
-      additionalWorkspaceMemberIds: [
+      workspace,
+      thread,
+      candidateWorkspaceMemberIds: [
         workspaceMemberId,
         ...eligibleWorkspaceMemberIds,
       ],
     });
 
-    if (memberCount <= 1) {
+    if (assistantPolicy.isDirectAssistantChat) {
       return true;
+    }
+
+    if (assistantPolicy.mode === AiChatAssistantMode.NEVER) {
+      return false;
+    }
+
+    if (isAssistantMentioned === true) {
+      return true;
+    }
+
+    if (assistantPolicy.mode === AiChatAssistantMode.MENTION_ONLY) {
+      return false;
+    }
+
+    const isAssistantParticipating = resolveAgentChatAssistantParticipation({
+      ...assistantPolicy,
+      isAssistantParticipant: thread.isAssistantParticipant,
+      isAssistantMentioned: false,
+    });
+
+    if (
+      !isAssistantParticipating ||
+      (!assistantPolicy.isDirectMessage && !shouldAssistantReply)
+    ) {
+      return false;
     }
 
     if (!this.aiEvaluationService.isAvailable()) {

@@ -19,6 +19,7 @@ type AgentChatMessageParticipationArgs = AgentChatThreadAccessArgs & {
   messageId: string;
   isAssistantMentioned: boolean;
   recipientWorkspaceMemberIds: string[];
+  mentionedWorkspaceMemberIds?: string[];
 };
 
 @Injectable()
@@ -114,6 +115,7 @@ export class AgentChatParticipationService {
     messageId,
     isAssistantMentioned,
     recipientWorkspaceMemberIds,
+    mentionedWorkspaceMemberIds,
     ...args
   }: AgentChatMessageParticipationArgs): Promise<string[]> {
     const isMessageSaved = await this.chatService.hasMessage({
@@ -133,7 +135,12 @@ export class AgentChatParticipationService {
     });
 
     if (isAssistantMentioned) {
-      await this.threadService.addAssistantParticipant(args);
+      await this.threadService.addAssistantParticipant({
+        ...args,
+        messageId,
+        recipientWorkspaceMemberIds,
+        mentionedWorkspaceMemberIds,
+      });
     }
 
     if (!isInitialMessage) {

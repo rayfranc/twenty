@@ -241,15 +241,16 @@ const SCHEMA = getWorkspaceSchemaName(WORKSPACE_ID);
         chatThreadService,
       );
 
-    const createQueueService = (messageRepository: typeof messages) =>
-      new AgentChatQueueService(
-        turns,
+    const createQueueService = (
+      messageRepository: typeof messages,
+    ): AgentChatQueueService =>
+      Object.assign(new AgentChatQueueService(), {
+        turnRepository: turns,
         messageRepository,
-        messageParts,
-        {} as never,
-        conversationWriter,
-        chatThreadService,
-      );
+        fileRepository: {},
+        conversationWriterService: conversationWriter,
+        threadService: chatThreadService,
+      });
 
     const createActorService = (messageRepository: typeof messages) =>
       new AgentChatActorService(

@@ -240,12 +240,17 @@ export class AgentChatResolver {
         workspaceId: workspace.id,
         isAssistantMentioned: isAssistantMentioned ?? false,
         recipientWorkspaceMemberIds: recipientWorkspaceMemberIds ?? [],
+        mentionedWorkspaceMemberIds: mentionedWorkspaceMemberIds ?? [],
         sendMessage: async (isAiChatInboxEnabled) => {
           await this.threadService.createThreadIfMissing({
             threadId,
             workspaceMemberId,
             workspaceId: workspace.id,
             channelId: channelId ?? undefined,
+            isAssistantMentioned: isAssistantMentioned ?? false,
+            initialIsAssistantParticipant: isAssistantParticipant ?? true,
+            recipientWorkspaceMemberIds: recipientWorkspaceMemberIds ?? [],
+            mentionedWorkspaceMemberIds: mentionedWorkspaceMemberIds ?? [],
           });
 
           return this.sendChatMessageToThread({
@@ -315,40 +320,28 @@ export class AgentChatResolver {
     mentionedWorkspaceMemberIds: string[];
     recipientWorkspaceMemberIds: string[];
   }): Promise<SendChatMessageResultDTO> {
-    const thread = await this.threadService.getWritableThread({
-      threadId,
-      workspaceMemberId,
-      workspaceId: workspace.id,
-    });
-
-    const canStoreAssistantParticipation =
-      isAiChatInboxEnabled &&
-      (await this.sharingService.hasAssistantParticipation(workspace.id));
-    const isInitialMessage =
-      isAiChatInboxEnabled &&
-      (await this.threadService.setInitialAssistantParticipation({
+    const { thread, isInitialMessage, assistantPolicy } =
+      await this.threadService.applyAssistantParticipation({
         threadId,
-        workspaceId: workspace.id,
         workspaceMemberId,
-        isAssistantParticipant:
-          (isAssistantMentioned ?? false) || initialIsAssistantParticipant,
-      }));
+        workspaceId: workspace.id,
+        isAssistantMentioned: isAssistantMentioned ?? false,
+        initialIsAssistantParticipant,
+        recipientWorkspaceMemberIds,
+        mentionedWorkspaceMemberIds,
+      });
     const candidateWorkspaceMemberIds = [
       ...mentionedWorkspaceMemberIds,
       ...(isInitialMessage ? recipientWorkspaceMemberIds : []),
     ];
-    const isAssistantParticipating =
-      !canStoreAssistantParticipation ||
-      (isInitialMessage
-        ? initialIsAssistantParticipant
-        : thread.isAssistantParticipant);
+    const assistantReplyContext = {
+      isAssistantMentioned: isAssistantMentioned ?? false,
+      isDirectAssistantChat: assistantPolicy.isDirectAssistantChat,
+    };
     const isAssistantReplying = await this.replyPolicyService.shouldReply({
       isAiChatInboxEnabled,
       shouldAssistantReply,
-      thread: {
-        id: thread.id,
-        isAssistantParticipant: isAssistantParticipating,
-      },
+      thread,
       workspaceId: workspace.id,
       workspaceMemberId,
       userWorkspaceId,
@@ -380,6 +373,7 @@ export class AgentChatResolver {
       const savedMessage =
         await this.agentChatStreamingService.saveMessageWithoutReply({
           thread,
+          assistantReplyContext,
           userWorkspaceId,
           workspaceMemberId,
           workspace,
@@ -393,6 +387,7 @@ export class AgentChatResolver {
 
     const result = await this.agentChatStreamingService.streamAgentChat({
       thread,
+      assistantReplyContext,
       browsingContext: browsingContext ?? null,
       modelId,
       userWorkspaceId,
