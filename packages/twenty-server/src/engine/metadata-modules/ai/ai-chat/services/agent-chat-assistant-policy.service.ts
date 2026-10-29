@@ -62,7 +62,7 @@ export class AgentChatAssistantPolicyService {
       ? (currentWorkspace.aiChatDirectMessageAssistantMode ??
         AiChatAssistantMode.MENTION_ONLY)
       : (currentWorkspace.aiChatInboxAssistantMode ??
-        AiChatAssistantMode.PROACTIVE);
+        AiChatAssistantMode.AUTOMATIC);
 
     if (
       isDirectMessage ||

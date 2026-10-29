@@ -25,7 +25,7 @@ export const resolveAgentChatAssistantParticipation = ({
     return false;
   }
 
-  if (isDirectMessage && mode === AiChatAssistantMode.PROACTIVE) {
+  if (isDirectMessage && mode === AiChatAssistantMode.AUTOMATIC) {
     return true;
   }
 

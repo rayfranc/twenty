@@ -267,7 +267,7 @@ describe('Assistant reply selection with stored conversation participants', () =
     ).toBe(true);
   });
 
-  it('blocks a previously proactive unmentioned message after switching to mention-only', async () => {
+  it('blocks a previously automatic unmentioned message after switching to mention-only', async () => {
     const threadId = await createGroup();
     const { messageId } = await saveMessageWithReplyContext({
       threadId,

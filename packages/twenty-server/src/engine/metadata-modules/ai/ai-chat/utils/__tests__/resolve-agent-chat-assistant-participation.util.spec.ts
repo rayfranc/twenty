@@ -36,11 +36,11 @@ describe('resolveAgentChatAssistantParticipation', () => {
     ).toBe(false);
   });
 
-  it('includes Ada in proactive DMs despite individual opt-outs', () => {
+  it('includes Ada in automatic DMs despite individual opt-outs', () => {
     expect(
       resolveAgentChatAssistantParticipation({
         ...DEFAULT_PARTICIPATION,
-        mode: AiChatAssistantMode.PROACTIVE,
+        mode: AiChatAssistantMode.AUTOMATIC,
         isDirectMessage: true,
         initialIsAssistantParticipant: false,
       }),
@@ -84,7 +84,7 @@ describe('resolveAgentChatAssistantParticipation', () => {
     expect(
       resolveAgentChatAssistantParticipation({
         ...DEFAULT_PARTICIPATION,
-        mode: AiChatAssistantMode.PROACTIVE,
+        mode: AiChatAssistantMode.AUTOMATIC,
         isAssistantParticipant: true,
         isInitialMessage: true,
         initialIsAssistantParticipant: false,

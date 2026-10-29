@@ -61,7 +61,7 @@ export const createChatParticipationTestContext = async () => {
 
   await setAssistantModes({
     aiChatDirectMessageAssistantMode: AiChatAssistantMode.MENTION_ONLY,
-    aiChatInboxAssistantMode: AiChatAssistantMode.PROACTIVE,
+    aiChatInboxAssistantMode: AiChatAssistantMode.AUTOMATIC,
   });
   const threadService = getAppProviderByClassName<AgentChatThreadService>(
     'AgentChatThreadService',

@@ -116,10 +116,10 @@ describe('Chat participation through the authenticated API', () => {
     expect(models.evaluate).not.toHaveBeenCalled();
   });
 
-  it('includes Ada on the first proactive DM message despite client opt-outs', async () => {
+  it('includes Ada on the first automatic DM message despite client opt-outs', async () => {
     models.enableEvaluation();
     await context.setAssistantModes({
-      aiChatDirectMessageAssistantMode: AiChatAssistantMode.PROACTIVE,
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.AUTOMATIC,
       aiChatInboxAssistantMode: AiChatAssistantMode.NEVER,
     });
     const threadId = await createDirectMessage();
@@ -142,7 +142,7 @@ describe('Chat participation through the authenticated API', () => {
   it('stops replies in an existing DM after the workspace changes to Never', async () => {
     models.enableEvaluation();
     await context.setAssistantModes({
-      aiChatDirectMessageAssistantMode: AiChatAssistantMode.PROACTIVE,
+      aiChatDirectMessageAssistantMode: AiChatAssistantMode.AUTOMATIC,
     });
     const threadId = await createDirectMessage();
     const first = await sendChatParticipationMessage({ threadId });
