@@ -232,59 +232,54 @@ export class AgentChatResolver {
     })
     recipientWorkspaceMemberIds?: string[] | null,
   ): Promise<SendChatMessageResultDTO> {
-    return this.participationService.runWithMessageLock({
-      workspaceId: workspace.id,
-      threadId,
-      work: async () => {
-        await this.threadService.createThreadIfMissing({
-          threadId,
-          workspaceMemberId,
-          workspaceId: workspace.id,
-          channelId: channelId ?? undefined,
-        });
-
-        const sentMessage =
-          await this.participationService.sendMessageWithParticipation({
+    const sentMessage =
+      await this.participationService.sendMessageWithParticipation({
+        threadId,
+        messageId,
+        workspaceMemberId,
+        workspaceId: workspace.id,
+        isAssistantMentioned: isAssistantMentioned ?? false,
+        recipientWorkspaceMemberIds: recipientWorkspaceMemberIds ?? [],
+        sendMessage: async (isAiChatInboxEnabled) => {
+          await this.threadService.createThreadIfMissing({
             threadId,
+            workspaceMemberId,
+            workspaceId: workspace.id,
+            channelId: channelId ?? undefined,
+          });
+
+          return this.sendChatMessageToThread({
+            threadId,
+            text,
             messageId,
+            browsingContext,
+            modelId,
+            fileAttachments,
+            userWorkspaceId,
             workspaceMemberId,
-            workspaceId: workspace.id,
-            isAssistantMentioned: isAssistantMentioned ?? false,
-            recipientWorkspaceMemberIds: recipientWorkspaceMemberIds ?? [],
-            sendMessage: (isAiChatInboxEnabled) =>
-              this.sendChatMessageToThread({
-                threadId,
-                text,
-                messageId,
-                browsingContext,
-                modelId,
-                fileAttachments,
-                userWorkspaceId,
-                workspaceMemberId,
-                workspace,
-                shouldAssistantReply: shouldAssistantReply ?? true,
-                isAiChatInboxEnabled,
-                isAssistantMentioned,
-                initialIsAssistantParticipant: isAssistantParticipant ?? true,
-                mentionedWorkspaceMemberIds: mentionedWorkspaceMemberIds ?? [],
-                recipientWorkspaceMemberIds: recipientWorkspaceMemberIds ?? [],
-              }),
-          });
-
-        const mentionedParticipantWorkspaceMemberIds =
-          await this.threadService.addMentionedParticipants({
-            threadId,
-            workspaceMemberId,
-            workspaceId: workspace.id,
+            workspace,
+            shouldAssistantReply: shouldAssistantReply ?? true,
+            isAiChatInboxEnabled,
+            isAssistantMentioned,
+            initialIsAssistantParticipant: isAssistantParticipant ?? true,
             mentionedWorkspaceMemberIds: mentionedWorkspaceMemberIds ?? [],
+            recipientWorkspaceMemberIds: recipientWorkspaceMemberIds ?? [],
           });
+        },
+      });
 
-        return {
-          ...sentMessage,
-          mentionedParticipantWorkspaceMemberIds,
-        };
-      },
-    });
+    const mentionedParticipantWorkspaceMemberIds =
+      await this.threadService.addMentionedParticipants({
+        threadId,
+        workspaceMemberId,
+        workspaceId: workspace.id,
+        mentionedWorkspaceMemberIds: mentionedWorkspaceMemberIds ?? [],
+      });
+
+    return {
+      ...sentMessage,
+      mentionedParticipantWorkspaceMemberIds,
+    };
   }
 
   private async sendChatMessageToThread({

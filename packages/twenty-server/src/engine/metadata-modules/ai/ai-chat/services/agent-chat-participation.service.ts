@@ -73,18 +73,24 @@ export class AgentChatParticipationService {
       return { ...sentMessage, recipientParticipantWorkspaceMemberIds: [] };
     }
 
-    const sentMessage = await sendMessage(true).catch(
-      async (error: unknown) => {
-        await this.completeMessage(participationArgs);
+    return this.runWithMessageLock({
+      workspaceId: participationArgs.workspaceId,
+      threadId: participationArgs.threadId,
+      work: async () => {
+        const sentMessage = await sendMessage(true).catch(
+          async (error: unknown) => {
+            await this.completeMessage(participationArgs);
 
-        throw error;
+            throw error;
+          },
+        );
+
+        const recipientParticipantWorkspaceMemberIds =
+          await this.completeMessage(participationArgs);
+
+        return { ...sentMessage, recipientParticipantWorkspaceMemberIds };
       },
-    );
-
-    const recipientParticipantWorkspaceMemberIds =
-      await this.completeMessage(participationArgs);
-
-    return { ...sentMessage, recipientParticipantWorkspaceMemberIds };
+    });
   }
 
   // The message may already be saved, so a participation failure must not fail the send
