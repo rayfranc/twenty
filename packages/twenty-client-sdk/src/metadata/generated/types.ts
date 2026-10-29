@@ -1499,9 +1499,6 @@ export default {
             "isPreInstalled": [
                 4
             ],
-            "isVetted": [
-                4
-            ],
             "latestAvailableVersion": [
                 1
             ],
@@ -5948,7 +5945,7 @@ export default {
             "id": [
                 1
             ],
-            "isVetted": [
+            "isListed": [
                 4
             ],
             "logoUrl": [
@@ -5996,9 +5993,6 @@ export default {
                 10
             ],
             "isListed": [
-                4
-            ],
-            "isVetted": [
                 4
             ],
             "issueReportUrl": [
@@ -10768,6 +10762,9 @@ export default {
             "exportApplication": [
                 51,
                 {
+                    "shouldIncludeDependencies": [
+                        4
+                    ],
                     "universalIdentifier": [
                         525,
                         "UUID!"
@@ -11502,13 +11499,7 @@ export default {
                 }
             ],
             "publicMarketplaceApps": [
-                333,
-                {
-                    "isVetted": [
-                        4,
-                        "Boolean!"
-                    ]
-                }
+                333
             ],
             "recordPermissions": [
                 430,
